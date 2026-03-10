@@ -1,208 +1,140 @@
-import random
-import subprocess
-import time
-import csv
-import os
-import psutil
-import math
+import random, subprocess, time, csv
 from pysat.solvers import Solver
-import pandas as pd
-import matplotlib.pyplot as plt
 
 class Course:
     def __init__(self,i,s,d,t):
-        self.i=i
-        self.s=s
-        self.d=d
-        self.t=t
+        self.i=i; self.s=s; self.d=d; self.t=t
 
-def random_instance_to_file(path,rooms=None,n=None):
-    if rooms is None:
-        rooms=random.randint(3,8)
-    if n is None:
-        n=random.randint(5,20)
-    with open(path,"w") as f:
-        f.write(f"M {rooms}\n")
-        f.write(f"N {n}\n")
+def generate_instance(file):
+    m=random.randint(3,7)
+    n=random.randint(5,15)
+    with open(file,"w") as f:
+        f.write(f"M {m}\nN {n}\n")
         for i in range(1,n+1):
-            s=random.randint(1,30)
-            t=random.randint(1,7)
-            d=s+t+random.randint(3,20)
+            s=random.randint(1,25)
+            t=random.randint(1,6)
+            d=s+t+random.randint(3,10)
             f.write(f"C {i} {s} {d} {t}\n")
 
-def parse_input(file):
-    rooms=0
-    courses=[]
-    with open(file) as f:
-        for line in f:
-            p=line.strip().split()
-            if not p:
-                continue
-            if p[0]=="M":
-                rooms=int(p[1])
-            if p[0]=="C":
-                courses.append(Course(int(p[1]),int(p[2]),int(p[3]),int(p[4])))
+def read_instance(file):
+    rooms=0; courses=[]
+    for line in open(file):
+        p=line.split()
+        if not p: continue
+        if p[0]=="M": rooms=int(p[1])
+        if p[0]=="C": courses.append(Course(int(p[1]),int(p[2]),int(p[3]),int(p[4])))
     return rooms,courses
 
-def encode_option1(rooms,courses):
-    var={}
-    vid=1
+def encode1(rooms,courses):
+    var={}; vid=1
     for c in courses:
-        for j in range(1,rooms+1):
+        for r in range(rooms):
             for t in range(c.s,c.d-c.t+2):
-                var[(c.i,j,t)]=vid
-                vid+=1
+                var[(c.i,r,t)]=vid; vid+=1
     clauses=[]
     for c in courses:
-        cl=[var[(c.i,j,t)] for j in range(1,rooms+1) for t in range(c.s,c.d-c.t+2)]
-        clauses.append(cl)
-    for c in courses:
-        poss=[(j,t) for j in range(1,rooms+1) for t in range(c.s,c.d-c.t+2)]
-        L=len(poss)
-        for a in range(L):
-            for b in range(a+1,L):
-                j1,t1=poss[a]
-                j2,t2=poss[b]
-                clauses.append([-var[(c.i,j1,t1)],-var[(c.i,j2,t2)]])
+        opts=[var[(c.i,r,t)] for r in range(rooms) for t in range(c.s,c.d-c.t+2)]
+        clauses.append(opts)
+        for i in range(len(opts)):
+            for j in range(i+1,len(opts)):
+                clauses.append([-opts[i],-opts[j]])
     for i in range(len(courses)):
-        for jdx in range(i+1,len(courses)):
-            c1=courses[i]; c2=courses[jdx]
-            for room in range(1,rooms+1):
+        for j in range(i+1,len(courses)):
+            c1,c2=courses[i],courses[j]
+            for r in range(rooms):
                 for t1 in range(c1.s,c1.d-c1.t+2):
                     for t2 in range(c2.s,c2.d-c2.t+2):
-                        if not (t1+c1.t-1 < t2 or t2+c2.t-1 < t1):
-                            clauses.append([-var[(c1.i,room,t1)],-var[(c2.i,room,t2)]])
+                        if not(t1+c1.t-1<t2 or t2+c2.t-1<t1):
+                            clauses.append([-var[(c1.i,r,t1)],-var[(c2.i,r,t2)]])
     return vid-1,clauses
 
-def encode_option2(rooms,courses):
-    x={}
-    y={}
-    vid=1
+def encode2(rooms,courses):
+    x={}; y={}; vid=1
     for c in courses:
-        for room in range(1,rooms+1):
-            x[(c.i,room)]=vid; vid+=1
+        for r in range(rooms):
+            x[(c.i,r)]=vid; vid+=1
     for c in courses:
         for t in range(c.s,c.d-c.t+2):
             y[(c.i,t)]=vid; vid+=1
     clauses=[]
     for c in courses:
-        clauses.append([x[(c.i,room)] for room in range(1,rooms+1)])
-        ts=list(range(c.s,c.d-c.t+2))
-        for a in range(len(ts)):
-            for b in range(a+1,len(ts)):
-                clauses.append([-y[(c.i,ts[a])],-y[(c.i,ts[b])]])
-        clauses.append([y[(c.i,t)] for t in ts])
-        for r1 in range(1,rooms+1):
-            for r2 in range(r1+1,rooms+1):
-                clauses.append([-x[(c.i,r1)],-x[(c.i,r2)]])
+        rooms_vars=[x[(c.i,r)] for r in range(rooms)]
+        clauses.append(rooms_vars)
+        for i in range(len(rooms_vars)):
+            for j in range(i+1,len(rooms_vars)):
+                clauses.append([-rooms_vars[i],-rooms_vars[j]])
+        ts=[y[(c.i,t)] for t in range(c.s,c.d-c.t+2)]
+        clauses.append(ts)
+        for i in range(len(ts)):
+            for j in range(i+1,len(ts)):
+                clauses.append([-ts[i],-ts[j]])
     for i in range(len(courses)):
-        for jdx in range(i+1,len(courses)):
-            c1=courses[i]; c2=courses[jdx]
-            for room in range(1,rooms+1):
+        for j in range(i+1,len(courses)):
+            c1,c2=courses[i],courses[j]
+            for r in range(rooms):
                 for t1 in range(c1.s,c1.d-c1.t+2):
                     for t2 in range(c2.s,c2.d-c2.t+2):
-                        if not (t1+c1.t-1 < t2 or t2+c2.t-1 < t1):
-                            clauses.append([-x[(c1.i,room)],-y[(c1.i,t1)],-x[(c2.i,room)],-y[(c2.i,t2)]])
+                        if not(t1+c1.t-1<t2 or t2+c2.t-1<t1):
+                            clauses.append([-x[(c1.i,r)],-y[(c1.i,t1)],-x[(c2.i,r)],-y[(c2.i,t2)]])
     return vid-1,clauses
 
-def write_dimacs(num_vars,clauses,path):
-    with open(path,"w") as f:
-        f.write(f"p cnf {num_vars} {len(clauses)}\n")
-        for cl in clauses:
-            f.write(" ".join(map(str,cl))+" 0\n")
+def write_cnf(vars,clauses,file):
+    with open(file,"w") as f:
+        f.write(f"p cnf {vars} {len(clauses)}\n")
+        for c in clauses:
+            f.write(" ".join(map(str,c))+" 0\n")
 
-def clause_length_counts(clauses):
-    two=0; three=0; more=0
-    for cl in clauses:
-        l=len(cl)
-        if l==2: two+=1
-        elif l==3: three+=1
-        elif l>3: more+=1
-    return two,three,more
+def run_z3(file):
+    t=time.time()
+    out=subprocess.run(["z3",file],capture_output=True,text=True).stdout.lower()
+    return ("sat" if "sat" in out else "unsat"),time.time()-t
 
-def run_z3(cnf_path,timeout=None):
-    cmd=["z3",cnf_path]
-    start=time.time()
-    try:
-        p=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        ps=psutil.Process(p.pid)
-        out,err=p.communicate(timeout=timeout)
-        end=time.time()
-        mem=0
-        try:
-            mem=ps.memory_info().rss
-        except:
-            mem=0
-        txt=out.decode()+err.decode()
-        res="unknown"
-        if "sat" in txt.lower(): res="sat"
-        if "unsat" in txt.lower(): res="unsat"
-        return res,end-start,mem
-    except subprocess.TimeoutExpired:
-        p.kill()
-        return "timeout",None,None
-
-def run_pysat_solver(name,clauses,timeout=None):
-    start=time.time()
-    proc=psutil.Process(os.getpid())
-    mem_before=proc.memory_info().rss
+def run_pysat(name,clauses):
+    t=time.time()
     with Solver(name=name) as s:
         s.append_formula(clauses)
-        sat=s.solve()
-    end=time.time()
-    mem_after=proc.memory_info().rss
-    mem=mem_after-mem_before
-    res="sat" if sat else "unsat"
-    return res,end-start,max(mem,0)
+        res=s.solve()
+    return ("sat" if res else "unsat"),time.time()-t
 
-def single_case_run(testfile,do_write_dimacs=True,run_z3_flag=True,run_pysat_flag=True,timeout=60):
-    rooms,courses=parse_input(testfile)
-    v1,c1=encode_option1(rooms,courses)
-    v2,c2=encode_option2(rooms,courses)
-    if do_write_dimacs:
-        write_dimacs(v1,c1,testfile.replace(".txt","_opt1.cnf"))
-        write_dimacs(v2,c2,testfile.replace(".txt","_opt2.cnf"))
-    two1,three1,more1=clause_length_counts(c1)
-    two2,three2,more2=clause_length_counts(c2)
-    results=[]
-    if run_z3_flag:
-        r1,t1,mem1=run_z3(testfile.replace(".txt","_opt1.cnf"),timeout)
-        r2,t2,mem2=run_z3(testfile.replace(".txt","_opt2.cnf"),timeout)
-        results.append(("z3","opt1",v1,len(c1),two1,three1,more1,r1,t1,mem1))
-        results.append(("z3","opt2",v2,len(c2),two2,three2,more2,r2,t2,mem2))
-    if run_pysat_flag:
-        cl1=list(c1); cl2=list(c2)
-        r1p,t1p,mem1p=run_pysat_solver("m22",cl1,timeout)
-        r2p,t2p,mem2p=run_pysat_solver("m22",cl2,timeout)
-        results.append(("m22","opt1",v1,len(c1),two1,three1,more1,r1p,t1p,mem1p))
-        results.append(("m22","opt2",v2,len(c2),two2,three2,more2,r2p,t2p,mem2p))
-        r1g,t1g,mem1g=run_pysat_solver("g3",cl1,timeout)
-        r2g,t2g,mem2g=run_pysat_solver("g3",cl2,timeout)
-        results.append(("g3","opt1",v1,len(c1),two1,three1,more1,r1g,t1g,mem1g))
-        results.append(("g3","opt2",v2,len(c2),two2,three2,more2,r2g,t2g,mem2g))
-    return results
+def experiment():
+    rows=[["test","solver","encoding","vars","clauses","time"]]
 
-def batch_experiment(output_csv="results.csv",tests=100,timeout=60):
-    header=["test","solver","encoding","vars","clauses","two_lit","three_lit","more_lit","result","time","mem_bytes"]
-    rows=[header]
-    for i in range(1,tests+1):
-        fname=f"test_{i}.txt"
-        random_instance_to_file(fname)
-        res=single_case_run(fname,do_write_dimacs=True,run_z3_flag=True,run_pysat_flag=True,timeout=timeout)
-        for r in res:
-            rows.append([i,r[0],r[1],r[2],r[3],r[4],r[5],r[6],r[7],r[8],r[9]])
-        if i%10==0:
-            print("done",i)
-    with open(output_csv,"w",newline="") as f:
-        w=csv.writer(f)
-        w.writerows(rows)
-    df=pd.read_csv(output_csv)
-    agg=df.groupby(["solver","encoding"])["time"].mean().unstack()
-    agg.plot(kind="bar")
-    plt.ylabel("avg time (s)")
-    plt.tight_layout()
-    plt.savefig("performance.png")
-    print("done all; results.csv and performance.png written")
+    for i in range(1,101):
+
+        fname=f"test{i}.txt"
+        generate_instance(fname)
+        rooms,courses=read_instance(fname)
+
+        v1,c1=encode1(rooms,courses)
+        v2,c2=encode2(rooms,courses)
+
+        write_cnf(v1,c1,f"opt1.cnf")
+        write_cnf(v2,c2,f"opt2.cnf")
+
+        r,t=run_z3("opt1.cnf")
+        rows.append([i,"Z3","opt1",v1,len(c1),t])
+
+        r,t=run_z3("opt2.cnf")
+        rows.append([i,"Z3","opt2",v2,len(c2),t])
+
+        r,t=run_pysat("m22",c1)
+        rows.append([i,"MiniSAT","opt1",v1,len(c1),t])
+
+        r,t=run_pysat("m22",c2)
+        rows.append([i,"MiniSAT","opt2",v2,len(c2),t])
+
+        r,t=run_pysat("g3",c1)
+        rows.append([i,"Glucose","opt1",v1,len(c1),t])
+
+        r,t=run_pysat("g3",c2)
+        rows.append([i,"Glucose","opt2",v2,len(c2),t])
+
+        if i%10==0: print("completed",i)
+
+    with open("results.csv","w",newline="") as f:
+        csv.writer(f).writerows(rows)
+
+    print("results.csv generated")
 
 if __name__=="__main__":
-    batch_experiment(output_csv="results.csv",tests=100,timeout=30)
+    experiment()
